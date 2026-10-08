@@ -1,0 +1,3 @@
+interface:
+  display_name: "设计接口"
+  short_description: "探索不同的 module interface 方案"

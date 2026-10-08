@@ -1,0 +1,4 @@
+interface:
+  display_name: "写作手"
+  short_description: "按华为杯格式规范生成论文源、docx 与提交用 PDF，并自动核验格式合规"
+  default_prompt: "Use $math-writer 依据 modeling/ 与 solving/ 的材料，按华为杯格式规范撰写论文并导出 PDF。"

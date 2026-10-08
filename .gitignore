@@ -1,0 +1,43 @@
+# ---- local scratch files ----
+.tmp-*
+.tmp-inventory.json
+
+# ---- local scratch checkouts (third-party MCP servers, own .git each) ----
+/tmp_browsermcp/
+/tmp_gms/
+/tmp_neon/
+/tmp_supabase/
+
+# ---- OS noise ----
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# ---- editors ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- node ----
+node_modules/
+.npm/
+.pnpm-store/
+
+# ---- build output ----
+dist/
+build/
+out/
+*.log

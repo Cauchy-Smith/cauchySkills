@@ -1,0 +1,410 @@
+#!/usr/bin/env python3
+"""Static quality gates for the ARS-Codex full-runtime adapter."""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import re
+import sys
+from pathlib import Path
+from typing import Any, Callable
+
+
+SCRIPT = Path(__file__).resolve()
+CODEX_ROOT = SCRIPT.parents[1]
+SUITE_ROOT = SCRIPT.parents[2]
+ARS_ROOT = SUITE_ROOT / "ars"
+PLUGIN_ROOT_CANDIDATE = SUITE_ROOT.parents[1]
+PLUGIN_ROOT = (
+    PLUGIN_ROOT_CANDIDATE
+    if (PLUGIN_ROOT_CANDIDATE / ".codex-plugin" / "plugin.json").is_file()
+    else SUITE_ROOT.parents[1] / "plugins" / "ars-codex"
+)
+FULL_RUNTIME_MANIFEST = CODEX_ROOT / "full-runtime-manifest.json"
+PACKAGE_MANIFEST = SUITE_ROOT / "manifest.json"
+HOOK_PACK = CODEX_ROOT / "hooks" / "hooks.json"
+TOPOLOGY_RUNNER = CODEX_ROOT / "scripts" / "ars_codex_topology_experiment.py"
+
+FORBIDDEN_HOOK_PATTERNS = (
+    r"\benv\b",
+    r"\bprintenv\b",
+    r"\bexport\b",
+    r"\bcurl\b",
+    r"\bwget\b",
+    r"\brm\b",
+    r"\bmv\b",
+    r"\bcp\b",
+    r"\bsudo\b",
+    r"\bchmod\b",
+    r"\bchown\b",
+    r">",
+    r"\|\s*sh\b",
+    r"\|\s*bash\b",
+    r"\.ssh",
+    r"ANTHROPIC_API_KEY",
+    r"OPENAI_API_KEY",
+)
+
+
+class GateFailure(RuntimeError):
+    pass
+
+
+def _json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _resolve_manifest_path(value: str) -> Path:
+    path = Path(value)
+    if path.parts and path.parts[0] == "skills":
+        return SUITE_ROOT.parents[1] / path
+    return SUITE_ROOT / path
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise GateFailure(message)
+
+
+def check_manifest() -> list[str]:
+    manifest = _json(FULL_RUNTIME_MANIFEST)
+    messages = ["full-runtime manifest parses as JSON"]
+
+    package = _json(PACKAGE_MANIFEST)
+    adapter_version = package.get("adapter_version")
+    skill_match = re.search(
+        r'(?m)^\s+version:\s*"([^"]+)"\s*$',
+        (SUITE_ROOT / "SKILL.md").read_text(encoding="utf-8"),
+    )
+    _require(bool(skill_match), "root SKILL.md metadata version is missing")
+    _require(
+        skill_match.group(1) == adapter_version,
+        f"SKILL.md version {skill_match.group(1)!r} != adapter version {adapter_version!r}",
+    )
+    plugin_version = _json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json").get("version")
+    _require(
+        plugin_version == adapter_version,
+        f"Desktop plugin version {plugin_version!r} != adapter version {adapter_version!r}",
+    )
+    repo_version_path = SUITE_ROOT.parents[1] / "VERSION"
+    if repo_version_path.is_file():
+        repo_version = repo_version_path.read_text(encoding="utf-8").strip()
+        _require(
+            repo_version == adapter_version,
+            f"repo VERSION {repo_version!r} != adapter version {adapter_version!r}",
+        )
+    messages.append(f"package version {adapter_version} is aligned across skill, manifest, plugin, and VERSION")
+
+    for key, value in manifest["paths"].items():
+        if key in {"adapter_root"}:
+            continue
+        path = _resolve_manifest_path(value)
+        _require(path.exists(), f"manifest path missing for {key}: {value}")
+    messages.append("declared adapter paths exist")
+
+    aliases: set[str] = set()
+    for command in manifest["commands"]:
+        for alias in command["aliases"]:
+            _require(alias not in aliases, f"duplicate alias: {alias}")
+            aliases.add(alias)
+        recipe = SUITE_ROOT / command["recipe"]
+        _require(recipe.exists(), f"command recipe missing: {command['recipe']}")
+    for required in (
+        "ars-reviewer",
+        "ars-mark-read",
+        "ars-unmark-read",
+        "ars-cache-invalidate",
+        "ars-3w",
+        "ars-rebuttal-audit",
+        "ars-full",
+        "ars-plan",
+        "ars-lit-review",
+    ):
+        _require(required in aliases, f"required alias absent: {required}")
+    messages.append(f"{len(manifest['commands'])} command routes have recipes")
+
+    for name, workflow in manifest["workflows"].items():
+        workflow_path = SUITE_ROOT / workflow["workflow_path"]
+        _require(workflow_path.exists(), f"workflow path missing for {name}: {workflow['workflow_path']}")
+        template = SUITE_ROOT / workflow["agent_template"]
+        _require(template.exists(), f"agent template missing for {name}: {workflow['agent_template']}")
+    messages.append(f"{len(manifest['workflows'])} workflows have templates")
+
+    allowed_gate_kinds = {
+        "packaging",
+        "routing",
+        "agent-team",
+        "review",
+        "integrity",
+        "material-passport",
+        "evaluation",
+        "transparency",
+        "hooks",
+        "provenance",
+    }
+    allowed_parity = {"full", "near", "partial", "exploratory"}
+    local_runners = {"manifest", "router", "fixture", "topology-experiment", "hook-safety"}
+    gate_ids: set[str] = set()
+    active_upstream_paths: set[Path] = set()
+    for index, gate in enumerate(manifest.get("quality_gates", [])):
+        _require(isinstance(gate, dict), f"quality_gates[{index}] must be an object")
+        for key in ("id", "kind", "runner", "parity"):
+            _require(
+                isinstance(gate.get(key), str) and bool(gate[key]),
+                f"quality_gates[{index}] missing non-empty {key}",
+            )
+        gate_id = gate["id"]
+        _require(gate_id not in gate_ids, f"duplicate quality gate id: {gate_id}")
+        gate_ids.add(gate_id)
+        _require(gate["kind"] in allowed_gate_kinds, f"unknown quality gate kind: {gate['kind']}")
+        _require(gate["parity"] in allowed_parity, f"unknown quality gate parity: {gate['parity']}")
+        execution = gate.get("execution")
+        _require(
+            execution is None or execution == "hermetic",
+            f"quality gate {gate_id} has unsupported execution mode: {execution!r}",
+        )
+        runner = gate["runner"]
+        if runner.startswith("upstream:"):
+            runner_path = SUITE_ROOT / runner.removeprefix("upstream:")
+            _require(runner_path.is_file(), f"quality gate runner missing for {gate_id}: {runner}")
+            active_upstream_paths.add(runner_path.resolve())
+        else:
+            _require(runner in local_runners, f"unknown local quality gate runner: {runner}")
+    messages.append(f"{len(gate_ids)} quality gates have unique ids and resolvable runners")
+
+    inactive_paths: set[Path] = set()
+    for index, entry in enumerate(package.get("inactive_upstream_scripts", [])):
+        _require(
+            isinstance(entry, dict),
+            f"inactive_upstream_scripts[{index}] must be an object",
+        )
+        value = entry.get("path")
+        reason = entry.get("reason")
+        _require(isinstance(value, str) and bool(value), f"inactive entry {index} has no path")
+        _require(isinstance(reason, str) and bool(reason.strip()), f"inactive entry {value} has no reason")
+        inactive_path = _resolve_manifest_path(value)
+        _require(inactive_path.is_file(), f"inactive upstream path missing: {value}")
+        resolved = inactive_path.resolve()
+        _require(resolved not in inactive_paths, f"duplicate inactive upstream path: {value}")
+        _require(
+            resolved not in active_upstream_paths,
+            f"inactive upstream path is also registered as an active gate: {value}",
+        )
+        inactive_paths.add(resolved)
+    messages.append(f"{len(inactive_paths)} inactive upstream paths are unique and documented")
+    return messages
+
+
+def check_single_root_skill() -> list[str]:
+    root_skill = SUITE_ROOT / "SKILL.md"
+    _require(root_skill.exists(), "root SKILL.md missing")
+    vendored_skill_files = sorted(ARS_ROOT.rglob("SKILL.md"))
+    _require(not vendored_skill_files, "vendored workflow SKILL.md files would expose duplicate Codex skills: " + ", ".join(str(p) for p in vendored_skill_files))
+    workflow_files = sorted(ARS_ROOT.glob("*/WORKFLOW.md"))
+    workflow_names = {path.parent.name for path in workflow_files}
+    expected = {"deep-research", "academic-paper", "academic-paper-reviewer", "academic-pipeline", "experiment-agent"}
+    _require(expected.issubset(workflow_names), f"missing WORKFLOW.md files: {sorted(expected - workflow_names)}")
+    return ["single root skill is the only Codex-discoverable skill", f"{len(workflow_files)} vendored workflow entry files use WORKFLOW.md"]
+
+
+def check_hook_safety() -> list[str]:
+    pack = _json(HOOK_PACK)
+    _require(pack.get("default_enabled") is False, "hook pack must be disabled by default")
+    _require(pack.get("enabled_when") == "ARS_CODEX_HOOKS=1", "hook pack must require ARS_CODEX_HOOKS=1")
+    hooks = pack.get("hooks", [])
+    _require(isinstance(hooks, list), "hooks must be a list")
+    for hook in hooks:
+        _require(hook.get("mutates_files") is False, f"hook mutates files: {hook.get('id')}")
+        command = hook.get("command", "")
+        _require(command.startswith("python3 "), f"hook command must use python3 wrapper: {command}")
+        _require("ars_codex_hook.py" in command, f"hook command must use adapter hook wrapper: {command}")
+        for pattern in FORBIDDEN_HOOK_PATTERNS:
+            _require(not re.search(pattern, command), f"unsafe hook command pattern {pattern!r}: {command}")
+    return [f"{len(hooks)} hook command(s) are disabled-by-default and pass static safety checks"]
+
+
+def check_reviewer_fixture(fixture: Path | None = None) -> list[str]:
+    fixture = fixture or CODEX_ROOT / "tests" / "fixtures" / "reviewer_full_independent_sections.md"
+    text = fixture.read_text(encoding="utf-8")
+    required = [
+        "## Independent Reviewer: Methodology",
+        "## Independent Reviewer: Domain",
+        "## Independent Reviewer: Interdisciplinary",
+        "## Independent Reviewer: Devil's Advocate",
+        "## Editorial Synthesis",
+    ]
+    positions = []
+    for heading in required:
+        position = text.find(heading)
+        _require(position >= 0, f"reviewer fixture missing heading: {heading}")
+        positions.append(position)
+    _require(positions == sorted(positions), "editorial synthesis must appear after independent reviewer sections")
+    synthesis = text[positions[-1]:]
+    for marker in ("methodology concern retained", "domain concern retained", "devil's advocate dissent retained"):
+        _require(marker in synthesis, f"synthesis dropped minority marker: {marker}")
+    return ["paper-reviewer full-mode fixture preserves independent reviewer sections before synthesis"]
+
+
+def check_upstream_lock() -> list[str]:
+    package = _json(PACKAGE_MANIFEST)
+    sources = {item["name"]: item for item in package["source_repositories"]}
+    ars = sources.get("academic-research-skills")
+    _require(bool(ars), "package manifest missing academic-research-skills source")
+    commit = ars.get("commit", "")
+    _require(bool(re.fullmatch(r"[0-9a-f]{40}", commit)), f"academic-research-skills lock is not a full SHA: {commit}")
+    included = set(ars.get("included_paths", []))
+    for path in ("commands", "hooks", "tests", "docs", "shared", "scripts"):
+        _require(path in included or any(path in item for item in included), f"included_paths missing {path}")
+    return [f"upstream lock pins academic-research-skills@{commit[:7]}"]
+
+
+def check_topology_experiment() -> list[str]:
+    spec = importlib.util.spec_from_file_location("ars_codex_topology_experiment", TOPOLOGY_RUNNER)
+    _require(bool(spec and spec.loader), "topology experiment runner cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    result = module.validate_all(require_runs=False)
+    _require(result["status"] == "PASS", "topology experiment contract failed: " + ", ".join(result["reason_codes"]))
+    _require(result["task_count"] == 10, "topology experiment cohort must contain exactly 10 tasks")
+    _require(result["expected_run_count"] == 26, "topology experiment must declare exactly 26 matched task-arm runs")
+    return [
+        "topology experiment cohort freezes 10 tasks across reviewer and research/pipeline strata",
+        "26 task-arm plans have valid input digests and acyclic DAGs",
+    ]
+
+
+def check_desktop_plugin_bundle() -> list[str]:
+    plugin_manifest = PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
+    plugin_skills = PLUGIN_ROOT / "skills"
+    suite_entry = plugin_skills / "academic-research-suite"
+    skill_md = suite_entry / "SKILL.md"
+    package_manifest = suite_entry / "manifest.json"
+
+    _require(plugin_manifest.is_file(), f"Desktop plugin manifest missing: {plugin_manifest}")
+    manifest = _json(plugin_manifest)
+    _require(manifest.get("name") == "ars-codex", "Desktop plugin name must be ars-codex")
+    _require(
+        manifest.get("interface", {}).get("displayName") == "ARS-Codex",
+        "Desktop plugin display name must be ARS-Codex",
+    )
+    _require(
+        PLUGIN_ROOT.name == manifest.get("name"),
+        "Desktop plugin directory must match plugin manifest name",
+    )
+    _require(manifest.get("skills") == "./skills/", "Desktop plugin manifest must point at ./skills/")
+    _require(plugin_skills.exists(), f"Desktop plugin skills path missing: {plugin_skills}")
+    _require(plugin_skills.is_dir(), "Desktop plugin skills path must be a directory")
+    _require(not plugin_skills.is_symlink(), "Desktop plugin skills path must not be a symlink")
+    _require(suite_entry.is_dir(), "Desktop plugin bundle must include academic-research-suite")
+    _require(skill_md.is_file(), "Desktop plugin bundle academic-research-suite is missing SKILL.md")
+    _require(package_manifest.is_file(), "Desktop plugin bundle academic-research-suite is missing manifest.json")
+
+    marketplace_path = SUITE_ROOT.parents[1] / ".agents" / "plugins" / "marketplace.json"
+    if marketplace_path.is_file():
+        marketplace = _json(marketplace_path)
+        _require(marketplace.get("name") == "ars-codex", "repo marketplace name must be ars-codex")
+        _require(
+            marketplace.get("interface", {}).get("displayName") == "ARS-Codex",
+            "repo marketplace display name must be ARS-Codex",
+        )
+        entries = [entry for entry in marketplace.get("plugins", []) if entry.get("name") == "ars-codex"]
+        _require(len(entries) == 1, "repo marketplace must contain exactly one ars-codex entry")
+        source = entries[0].get("source", {})
+        _require(source.get("source") == "local", "ars-codex marketplace source must be local")
+        _require(source.get("path") == "./plugins/ars-codex", "ars-codex marketplace path is incorrect")
+        policy = entries[0].get("policy", {})
+        _require(policy.get("installation") == "AVAILABLE", "ars-codex must be available to install")
+        _require(policy.get("authentication") == "ON_INSTALL", "ars-codex auth policy must be ON_INSTALL")
+        _require(entries[0].get("category") == "Research", "ars-codex marketplace category must be Research")
+
+    symlinks = sorted(
+        str(path.relative_to(PLUGIN_ROOT))
+        for path in plugin_skills.rglob("*")
+        if path.is_symlink()
+    )
+    _require(
+        not symlinks,
+        "Desktop plugin bundle must not contain symlinks: " + ", ".join(symlinks[:20]),
+    )
+
+    ignored_names = {".DS_Store", ".pytest_cache", "__pycache__"}
+
+    def materialized_files(root: Path) -> dict[str, Path]:
+        return {
+            path.relative_to(root).as_posix(): path
+            for path in root.rglob("*")
+            if path.is_file()
+            and not any(part in ignored_names for part in path.relative_to(root).parts)
+            and path.suffix != ".pyc"
+            and path.suffix != ".log"
+        }
+
+    if suite_entry.resolve() != SUITE_ROOT.resolve():
+        canonical = materialized_files(SUITE_ROOT)
+        bundled = materialized_files(suite_entry)
+        missing = sorted(canonical.keys() - bundled.keys())
+        extra = sorted(bundled.keys() - canonical.keys())
+        changed = sorted(
+            rel_path
+            for rel_path in canonical.keys() & bundled.keys()
+            if canonical[rel_path].read_bytes() != bundled[rel_path].read_bytes()
+        )
+        _require(
+            not (missing or extra or changed),
+            "Desktop plugin bundle differs from canonical skill: "
+            f"missing={missing[:10]}, extra={extra[:10]}, changed={changed[:10]}",
+        )
+    return [
+        "ARS-Codex plugin and marketplace identities are aligned",
+        "Desktop plugin bundle uses a materialized skills directory",
+        "academic-research-suite is bundled without symlinks",
+        "Desktop plugin bundle is byte-identical to the canonical skill",
+    ]
+
+
+GATES: dict[str, Callable[[], list[str]]] = {
+    "desktop-plugin-bundle": check_desktop_plugin_bundle,
+    "manifest": check_manifest,
+    "single-root-skill": check_single_root_skill,
+    "hook-safety": check_hook_safety,
+    "reviewer-fixture": check_reviewer_fixture,
+    "upstream-lock": check_upstream_lock,
+    "topology-experiment": check_topology_experiment,
+}
+
+
+def run_gate(name: str) -> list[str]:
+    return GATES[name]()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("gate", choices=sorted([*GATES, "all"]))
+    parser.add_argument("--json", action="store_true", help="Emit machine-readable result")
+    args = parser.parse_args()
+
+    selected = list(GATES) if args.gate == "all" else [args.gate]
+    results: dict[str, Any] = {}
+    failed = False
+    for name in selected:
+        try:
+            results[name] = {"ok": True, "messages": run_gate(name)}
+        except GateFailure as exc:
+            failed = True
+            results[name] = {"ok": False, "error": str(exc)}
+
+    if args.json:
+        print(json.dumps(results, indent=2, sort_keys=True))
+    else:
+        for name, result in results.items():
+            if result["ok"]:
+                print(f"OK {name}: " + "; ".join(result["messages"]))
+            else:
+                print(f"FAIL {name}: {result['error']}", file=sys.stderr)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,4 @@
+interface:
+  display_name: "编程手"
+  short_description: "读取模型契约、跑出结果与论文图表、产出可复现的结果报告"
+  default_prompt: "Use $math-coder 按 modeling/handoff-coder.md 实现模型，跑出结果与图表并写结果报告。"

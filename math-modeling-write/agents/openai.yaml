@@ -1,0 +1,4 @@
+interface:
+  display_name: "数学建模写作规范"
+  short_description: "数学建模竞赛论文写作规范指导，包括摘要、问题重述、模型假设、符号说明、模型建立与求解等各部分的写作要求"
+  default_prompt: "帮我按照数学建模论文规范撰写/修改论文"

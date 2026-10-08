@@ -1,0 +1,4 @@
+interface:
+  display_name: "建模手"
+  short_description: "数学建模赛题解析、模型选型对比、建模契约与编程写作交接记录"
+  default_prompt: "Use $math-modeler 解析这道赛题，完成题型判定、模型选型对比与建模交接记录。"

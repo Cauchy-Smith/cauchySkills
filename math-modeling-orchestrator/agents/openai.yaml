@@ -1,0 +1,6 @@
+interface:
+  display_name: "数学建模全流程总控"
+  short_description: "自动管理数学建模六阶段、产物版本与质量门禁"
+  default_prompt: "使用 $math-modeling-orchestrator 管理当前数学建模项目的阶段、门禁与产物。"
+policy:
+  allow_implicit_invocation: true

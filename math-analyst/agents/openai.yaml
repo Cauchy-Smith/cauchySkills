@@ -1,0 +1,4 @@
+interface:
+  display_name: "赛题剖析"
+  short_description: "读懂赛题：拆小问、判题型、盘数据、记歧义，产出团队共用剖析简报"
+  default_prompt: "Use $math-analyst 剖析这道赛题与附件，产出 analysis/problem-brief.md。"
