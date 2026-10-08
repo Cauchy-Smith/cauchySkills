@@ -2,13 +2,13 @@
 
 个人 **Agent Skills** 合集：面向 Codex / Claude Code 等编码智能体的技能库，以「一个目录一个技能」组织，每个技能由一份 `SKILL.md` 定义（YAML frontmatter 声明 `name` 与 `description`，正文为执行指令）。
 
-共 **99** 个技能：82 个顶层技能 + `nature-skills/` 套件 12 个 + `.system/` 内置技能 5 个。
+共 **110** 个技能：93 个顶层技能 + `nature-skills/` 套件 12 个 + `.system/` 内置技能 5 个。
 
 ## 目录结构
 
 ```
 cauchySkills/
-├── <skill-name>/SKILL.md        # 顶层技能，共 82 个
+├── <skill-name>/SKILL.md        # 顶层技能，共 93 个
 ├── nature-skills/              # Nature 系列学术写作套件（含 12 个子技能）
 ├── .system/                    # 随 Codex 分发的内置技能
 └── *.md                        # 说明文档
@@ -87,6 +87,22 @@ cauchySkills/
 | [`ppt-master`](ppt-master/SKILL.md) | AI-driven multi-format SVG content generation system. Converts source documents (PDF/DOCX/URL/Markdown) into high-quality SVG pages and exports to PPTX through multi-role collaboration … |
 | [`ppt-outline-generator`](ppt-outline-generator/SKILL.md) | Use when the user wants to plan a presentation, turn notes or drafts into a slide outline, or structure a report, pitch, or review deck. |
 | [`hatch-pet`](hatch-pet/SKILL.md) | Create, repair, validate, visually QA, and package Codex-compatible animated pets and pet spritesheets from character art, generated images, company or prospect brand cues, or visual references … |
+
+### Office 文档 · 演示（OfficeCLI 套件）
+
+| 技能 | 说明 |
+| --- | --- |
+| [`officecli`](officecli/SKILL.md) | Create, analyze, proofread, and modify Office documents (.docx, .xlsx, .pptx) using the officecli CLI tool. Use when the user wants to create, inspect, check formatting, find issues, add charts … |
+| [`officecli-docx`](officecli-docx/SKILL.md) | Use this skill any time a .docx file is involved -- as input, output, or both. This includes: creating Word documents, reports, letters, memos, or proposals … |
+| [`officecli-xlsx`](officecli-xlsx/SKILL.md) | Use this skill any time a .xlsx file is involved -- as input, output, or both. This includes: creating spreadsheets, financial models, dashboards, or trackers … |
+| [`officecli-pptx`](officecli-pptx/SKILL.md) | Use this skill any time a .pptx file is involved -- as input, output, or both. This includes: creating slide decks, pitch decks, or presentations … |
+| [`officecli-academic-paper`](officecli-academic-paper/SKILL.md) | Use this skill to build academic-style .docx output: journal / conference / thesis chapters carrying formal citation style (APA, Chicago, IEEE, MLA), numbered equations … |
+| [`officecli-financial-model`](officecli-financial-model/SKILL.md) | Use this skill when the user wants to build a financial model — 3-statement model, DCF valuation, LBO, SaaS unit economics, sensitivity / scenario analysis, debt schedule … |
+| [`officecli-data-dashboard`](officecli-data-dashboard/SKILL.md) | Use this skill to build a multi-element Excel dashboard — Dashboard sheet on open, multiple formula-driven KPI cards, multiple charts, sparklines … |
+| [`officecli-pitch-deck`](officecli-pitch-deck/SKILL.md) | Use this skill when the user is building a fundraising / investor pitch deck — seed, Series A / B / C, convertible note, SAFE round, strategic raise … |
+| [`officecli-word-form`](officecli-word-form/SKILL.md) | Use this skill to create fillable Word forms (.docx) with real Content Controls (SDT) + legacy FormField checkboxes + MERGEFIELD mail-merge placeholders + document protection … |
+| [`morph-ppt`](morph-ppt/SKILL.md) | Use this skill when the user wants a .pptx with smooth cross-slide animation — PowerPoint Morph transitions, Keynote-style continuous motion, shapes that grow / move / rotate as the slide advances … |
+| [`morph-ppt-3d`](morph-ppt-3d/SKILL.md) | 3D Morph PPT — extends morph-ppt with GLB model insertion, cinematographic camera, model-content layout, and enriched visual design system. |
 
 ### 工程实践 · 调试 · 架构
 
